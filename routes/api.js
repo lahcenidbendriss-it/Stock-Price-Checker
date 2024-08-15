@@ -2,37 +2,57 @@ const express = require('express');
 const axios = require('axios');
 const router = express.Router();
 
-const proxyUrl = 'https://stock-price-checker-proxy.freecodecamp.rocks/v1/stock';
+// Simulated in-memory store for stock likes based on anonymized IP
+const stockLikes = {};
 
-// Endpoint to get stock prices
 router.get('/stock-prices', async (req, res) => {
+  const { stock, like } = req.query;
+  const stockSymbols = Array.isArray(stock) ? stock : [stock];
+
   try {
-    const { stock, like } = req.query;
-    if (!stock) {
-      return res.status(400).json({ error: 'Stock symbol is required' });
-    }
+    const stockData = await Promise.all(stockSymbols.map(async (symbol) => {
+      // Fetch stock data
+      const response = await axios.get(`https://stock-price-checker-proxy.freecodecamp.rocks/v1/stock/${symbol}/quote`);
+      const stockPrice = response.data.latestPrice;
 
-    // Ensure stock is an array
-    let stockSymbols = Array.isArray(stock) ? stock : [stock];
-    const requests = stockSymbols.map(symbol => {
-      const url = `${proxyUrl}/${symbol}/quote`;
-      console.log(`Fetching data from: ${url}`); // Log the URL for debugging
-      return axios.get(url);
-    });
+      // Simulated IP (In real applications, use hashed or anonymized IP)
+      const ip = req.ip;
 
-    const responses = await Promise.all(requests);
-    const stockData = responses.map((response, index) => ({
-      stock: stockSymbols[index],
-      price: response.data.latestPrice // Adjusted to match the correct response field
+      // Handle likes
+      if (like === 'true') {
+        if (!stockLikes[symbol]) {
+          stockLikes[symbol] = new Set();
+        }
+        stockLikes[symbol].add(ip);
+      }
+
+      return {
+        stock: symbol,
+        price: stockPrice,
+        likes: stockLikes[symbol] ? stockLikes[symbol].size : 0 // Ensure likes are always returned
+      };
     }));
 
-    // If 'like' query is present, handle it here (e.g., save to database)
-    // For example: handle likes here, if applicable
+    if (stockData.length === 1) {
+      // Single stock response (no change)
+      res.json({ stockData: stockData[0] });
+    } else {
+      // Multiple stocks response with relative likes
+      const [stock1, stock2] = stockData;
+      const rel_likes_1 = stock1.likes - stock2.likes;
+      const rel_likes_2 = stock2.likes - stock1.likes;
 
-    res.json({ stockData });
+      // Format response to match the expected result
+      const result = [
+        { stock: stock1.stock, price: stock1.price, rel_likes: rel_likes_1 },
+        { stock: stock2.stock, price: stock2.price, rel_likes: rel_likes_2 }
+      ];
+
+      res.json({ stockData: result });
+    }
   } catch (error) {
-    console.error('API route error:', error.response ? error.response.data : error.message);
-    res.status(500).json({ error: 'Internal Server Error' });
+    console.error("API route error:", error.message);
+    res.status(500).send("Error retrieving stock data.");
   }
 });
 
